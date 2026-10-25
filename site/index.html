@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>probable</title>
+    <meta name="description" content="Polished, animated charts for probabilities and forecasts. Framework-agnostic, built on d3." />
+    <link rel="preconnect" href="https://rsms.me/" />
+    <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <link rel="stylesheet" href="./site.css" />
+    <script>
+      try { const t = localStorage.getItem('probable-docs-theme'); if (t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)) document.documentElement.dataset.theme = 'dark' } catch {}
+    </script>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="nav" id="nav">
+        <a class="brand" href="#/">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 17l5-6 4 3 6-8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="6" r="2.4" fill="currentColor"/></svg>
+          <span>probable</span>
+        </a>
+        <nav id="toc"></nav>
+      </aside>
+      <div class="main">
+        <header class="bar">
+          <button class="menu" id="menu" aria-label="Menu">☰</button>
+          <div class="crumbs" id="crumbs"></div>
+          <div class="seg" id="theme" role="group" aria-label="Theme">
+            <button data-v="light">Light</button>
+            <button data-v="dark">Dark</button>
+          </div>
+        </header>
+        <main id="page" class="page"></main>
+      </div>
+    </div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

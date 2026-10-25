@@ -1,0 +1,69 @@
+{
+  "name": "probable",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Polished, animated charts for probabilities and forecasts. Framework-agnostic, built on d3.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/janoelze/probable.git"
+  },
+  "homepage": "https://endtime-instruments.org/probable/",
+  "type": "module",
+  "main": "./dist/probable.js",
+  "module": "./dist/probable.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/probable.js"
+    },
+    "./react": {
+      "types": "./dist/types/react.d.ts",
+      "import": "./dist/react.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "dev": "node scripts/gen-api.mjs && vite --config vite.site.config.ts",
+    "build": "vite build && tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "site:build": "node scripts/gen-api.mjs && vite build --config vite.site.config.ts",
+    "deploy": "sh scripts/deploy.sh",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "d3-array": "^3.2.4",
+    "d3-interpolate": "^3.0.1",
+    "d3-interpolate-path": "^2.3.0",
+    "d3-scale": "^4.0.2",
+    "d3-shape": "^3.2.0",
+    "d3-time": "^3.1.0"
+  },
+  "peerDependencies": {
+    "react": ">=17"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/d3-array": "^3.2.1",
+    "@types/d3-interpolate": "^3.0.4",
+    "@types/d3-scale": "^4.0.8",
+    "@types/d3-shape": "^3.1.6",
+    "@types/d3-time": "^3.0.4",
+    "@types/react": "^18.3.12",
+    "playwright": "^1.58.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}

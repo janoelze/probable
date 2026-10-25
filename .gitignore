@@ -1,0 +1,8 @@
+node_modules
+dist
+dist-site
+.compare
+site/api.json
+# Reverse-engineering notes and captures; kept locally, not published.
+research/
+.env.deploy
