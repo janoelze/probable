@@ -1,13 +1,13 @@
 // Gauge: a 200° arc showing one probability, for compact cards ("56% Up").
 
-import { injectStyles } from './theme'
+import { injectStyles, watchTheme, type ThemeName, type ThemeOption } from './theme'
 
 export interface GaugeOptions {
   /** 0..1 */
   value?: number
   /** Arc color (default green, drawn at `opacity`). */
   color?: string
-  /** Opacity of the value arc. */
+  /** Opacity of the value arc (default 0.55 light, 0.9 dark). */
   opacity?: number
   /** Arc radius in px. */
   radius?: number
@@ -16,16 +16,18 @@ export interface GaugeOptions {
   sweep?: number
   /** Gap between value arc and track, in degrees on each side. */
   gap?: number
-  /** Text under/inside the arc, e.g. "56%". */
+  /** Text centred under the arc, e.g. "56%". */
   label?: string
+  /** Light, dark or auto. */
+  theme?: ThemeOption
   /** Animate value changes. */
   animate?: boolean
 }
 
-export const GAUGE_DEFAULTS: Required<Omit<GaugeOptions, 'label'>> & { label: string } = {
+export const GAUGE_DEFAULTS: Required<Omit<GaugeOptions, 'label' | 'opacity'>> & { label: string; opacity?: number } = {
   value: 0.5,
   color: 'lab(45.7361% -45.2267 37.3056)',
-  opacity: 0.55,
+  theme: 'light',
   radius: 29,
   strokeWidth: 4.5,
   sweep: 200,
@@ -55,16 +57,21 @@ export class Gauge {
   private bar: SVGPathElement
   private text: HTMLSpanElement
   private shown = -1
+  private root: HTMLDivElement
+  private theme: ThemeName
+  private stopTheme: () => void
 
   /** Renders an inline gauge into `el`. */
   constructor(el: HTMLElement, options: GaugeOptions = {}) {
     injectStyles(el.ownerDocument)
     this.el = el
     this.o = { ...GAUGE_DEFAULTS, ...options }
-    const root = document.createElement('div')
+    const root = (this.root = document.createElement('div'))
     root.className = 'pb-root pb-gauge'
-    root.style.cssText = 'display:inline-flex;flex-direction:column;align-items:center;width:auto'
     el.appendChild(root)
+    const t = watchTheme(this.o.theme, (th) => ((this.theme = th), this.render()))
+    this.theme = t.theme
+    this.stopTheme = t.stop
     this.svg = document.createElementNS(SVG, 'svg')
     this.svg.style.overflow = 'visible'
     this.track = document.createElementNS(SVG, 'path')
@@ -74,10 +81,10 @@ export class Gauge {
       p.setAttribute('stroke-linecap', 'round')
       this.svg.appendChild(p)
     }
-    this.track.style.stroke = 'var(--pb-gray-200)'
+    this.track.style.stroke = 'var(--pb-gauge-track)'
     root.appendChild(this.svg)
     this.text = document.createElement('span')
-    this.text.style.cssText = 'margin-top:-14px;font-size:14px;line-height:16px;font-weight:600;color:var(--pb-content-primary)'
+    this.text.className = 'pb-gauge-label'
     root.appendChild(this.text)
     this.render()
   }
@@ -89,17 +96,27 @@ export class Gauge {
 
   /** Merge options and re-render. */
   setOptions(o: Partial<GaugeOptions>) {
+    const prev = this.o.theme
     Object.assign(this.o, o)
+    if (o.theme && o.theme !== prev) {
+      this.stopTheme()
+      const t = watchTheme(this.o.theme, (th) => ((this.theme = th), this.render()))
+      this.stopTheme = t.stop
+      this.theme = t.theme
+    }
     this.render()
   }
 
   /** Remove the gauge. */
   destroy() {
-    this.svg.parentElement?.remove()
+    this.stopTheme()
+    this.root.remove()
   }
 
   private render() {
-    const { radius: r, strokeWidth, sweep, color, opacity, label } = this.o
+    const { radius: r, strokeWidth, sweep, color, label } = this.o
+    this.root.dataset.pbTheme = this.theme
+    const opacity = this.o.opacity ?? (this.theme === 'dark' ? 0.9 : 0.55)
     const below = (sweep - 180) / 2
     const h = r + r * Math.sin((below * Math.PI) / 180)
     this.svg.setAttribute('width', String(2 * r))

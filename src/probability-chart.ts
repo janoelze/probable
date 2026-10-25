@@ -2,7 +2,7 @@
 
 import { scaleLinear, scaleTime, type ScaleLinear, type ScaleTime } from 'd3-scale'
 import { area as d3area, line, curveMonotoneX, type CurveFactory } from 'd3-shape'
-import { bisector, extent, min, max } from 'd3-array'
+import { bisector, bisectLeft, extent, min, max } from 'd3-array'
 import { interpolateRound } from 'd3-interpolate'
 // @ts-expect-error: package ships no types
 import { interpolatePath } from 'd3-interpolate-path'
@@ -20,6 +20,15 @@ export type LabelMode = 'end' | 'legend'
 export type ValueFormat = 'percent' | 'number' | 'currency'
 
 export interface TimeWindow { key: string; label: string }
+
+export interface Annotation {
+  /** Unix seconds. */
+  time: number
+  title: string
+  description?: string
+  /** Marker color (default: secondary text color). */
+  color?: string
+}
 
 export interface HoverPoint {
   id: string
@@ -95,8 +104,14 @@ export interface ProbabilityChartOptions {
   endColor?: string
   /** Value that sets the gradient's end color; defaults to the first series' last point. */
   lastPrice?: number
-  /** Fill under each line, fading from `area` opacity (e.g. 0.05) to 0. `true` = 0.05. */
+  /** Fill under each line, fading from `area` opacity (e.g. 0.05) to 0. `true` = 0.05. In stacked mode: the band opacity. */
   area?: boolean | number
+  /** Stack series as bands that add up to 100% (shares of mutually exclusive outcomes). */
+  stacked?: boolean
+  /** In stacked mode, rescale each moment so the shares sum to exactly 1. */
+  normalize?: boolean
+  /** Events marked on the time axis; hover a marker (or pass it with the cursor) to see its card. */
+  annotations?: Annotation[]
   /** `percent` (0..1 → "42%"), `number` ("6,594") or `currency` ("$1.2M"). */
   valueFormat?: ValueFormat
   /** Unit shown after the summary value, e.g. `'cases'`. */
@@ -156,6 +171,9 @@ export const CHART_DEFAULTS: Omit<Resolved, 'formatValue' | 'formatDate'> = {
   strokeWidth: 1.75,
   curve: curveMonotoneX,
   area: false,
+  stacked: false,
+  normalize: true,
+  annotations: [],
 }
 
 // Side-label layout constants (SIDE_ODDS_CONSTANTS).
@@ -231,6 +249,8 @@ interface Layout {
   /** Shared end-label column width when wrapping (labelMaxWidth). */
   labelWidth: number
   paths: Map<string, { d: string; backfillEndX?: number }>
+  /** Stacked mode: shared timeline and per-series band edges. */
+  stack?: Stack
 }
 
 interface SeriesEls {
@@ -250,10 +270,23 @@ interface SeriesEls {
   cancel: Cancel[]
 }
 
+interface AnnoCluster {
+  key: string
+  x: number
+  items: Annotation[]
+}
+
+interface Stack {
+  times: number[]
+  bands: Map<string, { lower: number[]; upper: number[]; share: number[] }>
+}
+
 interface Hover {
   x: number
   data: HoverPoint[]
   tops: number[]
+  /** Stacked mode: band centres (value units) for labels and pills. */
+  centers?: number[]
 }
 
 export class ProbabilityChart {
@@ -278,6 +311,11 @@ export class ProbabilityChart {
   private crosshair: SVGLineElement
   private anchorLine: SVGLineElement
   private gMarkers: SVGGElement
+  private gAnno!: SVGGElement
+  private annoGuide!: SVGLineElement
+  private annoCard!: HTMLDivElement
+  private annoClusters: AnnoCluster[] = []
+  private annoPinned: AnnoCluster | null = null
   private attribution: HTMLDivElement
   private dateTip: HTMLDivElement
   private pills: HTMLDivElement
@@ -334,10 +372,15 @@ export class ProbabilityChart {
     this.crosshair = s('line', { stroke: 'var(--pb-gray-100)', 'stroke-width': 1.5, 'pointer-events': 'none' }, this.gPlot)
     this.anchorLine = s('line', { stroke: 'var(--pb-gray-100)', 'stroke-width': 1.5, 'pointer-events': 'none' }, this.gPlot)
     this.gMarkers = s('g', {}, this.gPlot)
+    this.annoGuide = s('line', { 'stroke-width': 1, 'stroke-dasharray': '2 3', 'pointer-events': 'none' }, this.gPlot)
+    this.annoGuide.style.stroke = 'var(--pb-gray-400)'
+    this.annoGuide.style.display = 'none'
+    this.gAnno = s('g', { class: 'pb-annotations' }, this.gPlot)
     for (const l of [this.crosshair, this.anchorLine]) l.style.display = 'none'
     this.attribution = h('div', 'pb-attribution', this.inner)
     h('span', '', this.attribution)
     this.dateTip = h('div', 'pb-date-tip pb-off', this.inner)
+    this.annoCard = h('div', 'pb-anno-card', this.inner)
     this.pills = h('div', 'pb-pills', this.inner)
     this.side = h('div', 'pb-side', this.inner)
     this.errorEl = h('div', 'pb-error', this.inner)
@@ -462,8 +505,10 @@ export class ProbabilityChart {
     const o = this.o
     const all = this.series.flatMap((x) => x.data)
     const odds = this.labelMode()
+    const stack = o.stacked && this.series.length ? this.computeStack() : undefined
 
     const yDomainOf = (): [number, number] => {
+      if (stack) return [0, o.normalize ? 1 : Math.max(1e-9, ...stack.times.map((_, i) => Math.max(...[...stack.bands.values()].map((b) => b.upper[i]))))]
       const d: [number, number] = o.autoscale ? [min(all, (p) => p.value) || 0, max(all, (p) => p.value) || 1] : [0, 1]
       return d[1] - d[0] < Number.EPSILON
         ? [d[0] - Math.max(0.05 * Math.abs(d[0]), 0.05), d[1] + Math.max(0.05 * Math.abs(d[1]), 0.05)]
@@ -522,12 +567,49 @@ export class ProbabilityChart {
       .curve(o.curve)
     const paths = new Map<string, { d: string; backfillEndX?: number }>()
     for (const sr of this.series) {
-      const d = gen(sr.data) ?? ''
+      const band = stack?.bands.get(sr.id)
+      // Stacked: the line is the band's top edge.
+      const d = (band ? gen(stack!.times.map((t, i) => ({ time: t, value: band.upper[i] }))) : gen(sr.data)) ?? ''
       if (!d || d === 'M0,0Z') continue
       const bf = sr.backfilledData
-      paths.set(sr.id, { d, backfillEndX: bf.length ? x(dateOf(bf[bf.length - 1])) : undefined })
+      paths.set(sr.id, { d, backfillEndX: !band && bf.length ? x(dateOf(bf[bf.length - 1])) : undefined })
     }
-    return { width, height, margin, plotH, x, y, yTicks, xTicks, xFormat, sideOffset, chartEndX: width - margin.right - 12 - sideOffset, odds, labelWidth, paths }
+    return { width, height, margin, plotH, x, y, yTicks, xTicks, xFormat, sideOffset, chartEndX: width - margin.right - 12 - sideOffset, odds, labelWidth, paths, stack }
+  }
+
+  /**
+   * Aligns all series on one timeline (carrying each value forward, 0 before
+   * it starts), optionally normalises to shares, and stacks them: the first
+   * series is the top band, the last the bottom one.
+   */
+  private computeStack(): Stack {
+    const times = [...new Set(this.series.flatMap((s) => s.data.map((p) => p.time)))].sort((a, b) => a - b)
+    const aligned = this.series.map((sr) => {
+      const out: number[] = []
+      let j = 0
+      let v = 0
+      for (const t of times) {
+        while (j < sr.data.length && sr.data[j].time <= t) v = sr.data[j++].value
+        out.push(v)
+      }
+      return out
+    })
+    const share = aligned.map((vals, k) =>
+      vals.map((v, i) => {
+        if (!this.o.normalize) return v
+        const total = aligned.reduce((acc, a) => acc + a[i], 0)
+        return total > 0 ? v / total : 1 / aligned.length
+      }),
+    )
+    const bands = new Map<string, { lower: number[]; upper: number[]; share: number[] }>()
+    const base = times.map(() => 0)
+    for (let k = this.series.length - 1; k >= 0; k--) {
+      const lower = [...base]
+      const upper = lower.map((l, i) => l + share[k][i])
+      upper.forEach((u, i) => (base[i] = u))
+      bands.set(this.series[k].id, { lower, upper, share: share[k] })
+    }
+    return { times, bands }
   }
 
   // ── render ─────────────────────────────────────────────────────────────
@@ -553,6 +635,7 @@ export class ProbabilityChart {
     this.renderGrid(L)
     this.renderDefs()
     this.renderLines(L)
+    this.renderAnnotations(L)
     this.renderAttribution(L)
     this.side.style.top = `${margin.top}px`
     this.side.style.height = `${L.plotH}px`
@@ -702,10 +785,13 @@ export class ProbabilityChart {
       if (!e) e = this.createSeriesEls(sr)
       this.updateSeriesEls(e, sr, p, isNew)
       const last = sr.data[sr.data.length - 1]
-      e.dotCircle.setAttribute('cx', String(L.x(dateOf(last))))
-      e.dotCircle.setAttribute('cy', String(L.y(last.value)))
-      e.pulse.setAttribute('cx', String(L.x(dateOf(last))))
-      e.pulse.setAttribute('cy', String(L.y(last.value)))
+      const band = L.stack?.bands.get(sr.id)
+      const dx = band ? L.x(new Date(L.stack!.times[L.stack!.times.length - 1] * 1000)) : L.x(dateOf(last))
+      const dy = band ? L.y(band.upper[band.upper.length - 1]) : L.y(last.value)
+      e.dotCircle.setAttribute('cx', String(dx))
+      e.dotCircle.setAttribute('cy', String(dy))
+      e.pulse.setAttribute('cx', String(dx))
+      e.pulse.setAttribute('cy', String(dy))
       const dotFill = this.gradient() ? mixHsl(this.gradient()!.start, this.gradient()!.end, 100 * this.gradient()!.last) : sr.stroke
       e.dotCircle.setAttribute('fill', dotFill)
       e.pulse.setAttribute('fill', dotFill)
@@ -727,7 +813,8 @@ export class ProbabilityChart {
   }
 
   private updateArea(e: SeriesEls, sr: ResolvedSeries, L: Layout) {
-    if (!this.o.area) {
+    const band = L.stack?.bands.get(sr.id)
+    if (!this.o.area && !band) {
       e.area?.remove()
       e.area = undefined
       return
@@ -739,6 +826,21 @@ export class ProbabilityChart {
       if (this.o.animate) e.area.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 300, easing: 'ease-out' })
     }
     const i = this.series.indexOf(sr)
+    if (band) {
+      // Stacked band between the series below and this one's top edge.
+      const times = L.stack!.times
+      const gen = d3area<number>()
+        .x((t) => L.x(new Date(t * 1000)) ?? 0)
+        .y0((_, k) => L.y(band.lower[k]) ?? 0)
+        .y1((_, k) => L.y(band.upper[k]) ?? 0)
+        .curve(this.o.curve)
+      e.area.setAttribute('d', gen(times) ?? '')
+      e.area.setAttribute('fill', this.colorAt(sr.stroke, undefined))
+      e.area.setAttribute('fill-opacity', String(typeof this.o.area === 'number' ? this.o.area : 0.2))
+      e.area.style.clipPath = e.main.style.clipPath
+      return
+    }
+    e.area.removeAttribute('fill-opacity')
     const gen = d3area<Point>()
       .x((p) => L.x(dateOf(p)) ?? 0)
       .y0(L.plotH)
@@ -941,7 +1043,9 @@ export class ProbabilityChart {
       ;(item.firstElementChild as HTMLElement).style.background = sr.stroke
       const p = item.querySelector('p')!
       p.firstChild!.textContent = sr.label
-      p.querySelector('b')!.textContent = `\u00a0${this.legendValue(sr.data[sr.data.length - 1].value, sr.decimals)}`
+      const band = L?.stack?.bands.get(sr.id)
+      const lastValue = band ? band.share[band.share.length - 1] : sr.data[sr.data.length - 1].value
+      p.querySelector('b')!.textContent = `\u00a0${this.legendValue(lastValue, sr.decimals)}`
       list.appendChild(item)
     }
     for (const [id, el] of existing) if (!keep.has(id)) el.remove()
@@ -966,6 +1070,95 @@ export class ProbabilityChart {
       if (typeof wm === 'string') box.innerHTML = wm
       else box.appendChild(wm.cloneNode(true))
     }
+  }
+
+  /** Markers on the time axis; markers within 30px merge into one cluster. */
+  private renderAnnotations(L: Layout) {
+    this.gAnno.replaceChildren()
+    const list = this.o.annotations
+      .map((a) => ({ a, x: L.x(new Date(a.time * 1000)) }))
+      .filter(({ x }) => Number.isFinite(x) && x >= L.margin.left && x <= L.chartEndX)
+      .sort((p, q) => p.x - q.x)
+    // Chain markers that sit within 30px of the previous one; a cluster sits at the centre of its span.
+    const clusters: AnnoCluster[] = []
+    let first = 0
+    let prev = -Infinity
+    for (const it of list) {
+      const last = clusters[clusters.length - 1]
+      if (last && it.x - prev <= 30) {
+        last.items.push(it.a)
+        last.x = (first + it.x) / 2
+      } else {
+        clusters.push({ key: '', x: it.x, items: [it.a] })
+        first = it.x
+      }
+      prev = it.x
+    }
+    clusters.forEach((c) => (c.key = c.items.map((i) => i.time).join('|')))
+    this.annoClusters = clusters
+    const y = L.plotH
+    for (const c of clusters) {
+      const g = s('g', { class: 'pb-annotation', transform: `translate(${c.x}, ${y})` }, this.gAnno)
+      g.style.cursor = 'pointer'
+      s('circle', { r: 12, fill: 'transparent' }, g)
+      const color = c.items[0].color ?? 'var(--pb-content-secondary)'
+      const dot = s('circle', { r: c.items.length > 1 ? 7 : 4.5, 'stroke-width': 1.5 }, g)
+      dot.style.fill = 'var(--pb-chart-bg, var(--pb-surface))'
+      dot.style.stroke = color
+      if (c.items.length > 1) {
+        const t = s('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': 9, 'font-weight': 600 }, g)
+        t.style.fill = color
+        t.textContent = String(c.items.length)
+      }
+      g.addEventListener('mouseenter', () => {
+        this.annoPinned = c
+        this.syncAnnotationCard(L)
+      })
+      g.addEventListener('mouseleave', () => {
+        this.annoPinned = null
+        this.syncAnnotationCard(L)
+      })
+    }
+    this.syncAnnotationCard(L)
+  }
+
+  /** Shows the card for the hovered marker, or for a cluster within 10px of the crosshair. */
+  private syncAnnotationCard(L: Layout) {
+    const hv = this.hover
+    let c = this.annoPinned
+    if (!c && hv && !this.drag.active) {
+      let best = 11
+      for (const k of this.annoClusters) {
+        const d = Math.abs(hv.x - k.x)
+        if (d < best) {
+          best = d
+          c = k
+        }
+      }
+    }
+    for (const g of this.gAnno.children) g.classList.toggle('pb-active', !!c && g.getAttribute('transform')?.startsWith(`translate(${c.x},`) === true)
+    if (!c) {
+      this.annoCard.classList.remove('pb-on')
+      this.annoGuide.style.display = 'none'
+      return
+    }
+    Object.entries({ x1: c.x, x2: c.x, y1: 0, y2: L.plotH }).forEach(([k, v]) => this.annoGuide.setAttribute(k, String(v)))
+    this.annoGuide.style.display = ''
+    if (this.annoCard.dataset.key !== c.key) {
+      this.annoCard.dataset.key = c.key
+      this.annoCard.replaceChildren()
+      for (const a of [...c.items].reverse()) {
+        const item = h('div', 'pb-anno-item', this.annoCard)
+        h('span', 'pb-anno-date', item).textContent = formatDate(new Date(a.time * 1000), 'MMM d, yyyy')
+        h('b', '', item).textContent = a.title
+        if (a.description) h('p', '', item).textContent = a.description
+      }
+    }
+    const w = this.annoCard.offsetWidth
+    const hgt = this.annoCard.offsetHeight
+    this.annoCard.style.left = `${Math.max(0, Math.min(c.x - w / 2, L.width - L.margin.right - w))}px`
+    this.annoCard.style.top = `${L.margin.top + L.plotH - hgt - 16}px`
+    this.annoCard.classList.add('pb-on')
   }
 
   /** Big current value + change over the range (number charts, or `summary: true`). */
@@ -1111,6 +1304,21 @@ export class ProbabilityChart {
     const t = L.x.invert(x)
     const data: HoverPoint[] = []
     const tops: number[] = []
+    if (L.stack) {
+      const { times, bands } = L.stack
+      let i = bisectLeft(times, +t / 1000)
+      if (i > 0 && (i >= times.length || +t / 1000 - times[i - 1] < times[i] - +t / 1000)) i -= 1
+      i = Math.max(0, Math.min(times.length - 1, i))
+      const centers: number[] = []
+      for (const sr of this.series) {
+        const b = bands.get(sr.id)
+        if (!b) continue
+        data.push({ id: sr.id, label: sr.label, color: sr.stroke, decimals: sr.decimals, point: { time: times[i], value: b.share[i] } })
+        tops.push(L.y(b.upper[i]))
+        centers.push((b.lower[i] + b.upper[i]) / 2)
+      }
+      return { x, data, tops, centers }
+    }
     for (const sr of this.series) {
       const i = bisectDate(sr.data, t, 1)
       const a = sr.data[i - 1]
@@ -1205,6 +1413,7 @@ export class ProbabilityChart {
     }
 
     this.renderDateTip(L)
+    this.syncAnnotationCard(L)
     if (this.summaryOn()) this.renderSummary()
     if (L.odds === 'legend') {
       this.side.replaceChildren()
@@ -1279,13 +1488,15 @@ export class ProbabilityChart {
     const dom = y.domain()
     const span = dom[1] - dom[0] === 0 ? 0.002 : dom[1] - dom[0]
     const minDiff = 0.1 * span
-    const sorted = [...hv.data].sort((a, b) => (a.point.value > b.point.value ? 1 : -1))
+    // Position by value, or by band centre when stacked.
+    const pos = new Map(hv.data.map((p, i) => [p.id, hv.centers ? hv.centers[i] : p.point.value]))
+    const sorted = [...hv.data].sort((a, b) => (pos.get(a.id)! > pos.get(b.id)! ? 1 : -1))
     const adjusted: number[] = []
     sorted.forEach((p, i) => {
       const floor = (i > 0 ? adjusted[i - 1] : -Infinity) + minDiff
-      let c = p.point.value
+      let c = pos.get(p.id)!
       if (c < floor) c = floor + 0.002
-      if (i === sorted.length - 1) c = Math.min(c, sorted[0].point.value + span)
+      if (i === sorted.length - 1) c = Math.min(c, pos.get(sorted[0].id)! + span)
       adjusted.push(c)
     })
     const maxLeft = width - margin.right - margin.left - 20
@@ -1333,11 +1544,16 @@ export class ProbabilityChart {
     let items: Item[]
     if (hv && hv.data.length && hv.tops.length) {
       items = hv.data
-        .map((p, i) => ({ id: p.id, label: p.label, color: p.color, value: p.point.value, decimals: p.decimals, y: hv.tops[i] }))
+        .map((p, i) => ({ id: p.id, label: p.label, color: p.color, value: p.point.value, decimals: p.decimals, y: hv.centers ? y(hv.centers[i]) : hv.tops[i] }))
         .filter((it) => it.y >= 0 && it.y <= L.height)
     } else {
       items = this.series.map((sr) => {
         const last = sr.data[sr.data.length - 1]
+        const b = L.stack?.bands.get(sr.id)
+        if (b) {
+          const k = b.share.length - 1
+          return { id: sr.id, label: sr.label, color: sr.stroke, value: b.share[k], decimals: sr.decimals, y: y((b.lower[k] + b.upper[k]) / 2) }
+        }
         return { id: sr.id, label: sr.label, color: sr.stroke, value: last.value, decimals: sr.decimals, y: y(last.value) }
       })
     }

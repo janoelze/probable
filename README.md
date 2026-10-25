@@ -8,9 +8,12 @@ color is a CSS variable.
 
 - **`ProbabilityChart`**: lines over time with end labels or a legend, hover pills
   that avoid each other, drag-to-compare, time windows, wrapped labels, number and
-  currency modes, gradient lines, area fills, dark mode. Updates morph smoothly.
+  currency modes, stacked shares, event annotations, gradient lines, area fills,
+  dark mode. Updates morph smoothly.
 - **`LiveChart`**: a streaming price line that scrolls in real time, with eased
   ticks, auto-scaling, a target line and a crosshair.
+- **`OutcomeBars`**: a ranked list of outcomes with bars, values and change
+  badges; rows glide to their new rank and numbers count on update.
 - **`Sparkline`**: compact lines for cards and table rows, with draw-in, a faint
   track, a pulsing end dot and optional scrubbing.
 - **`Gauge`**: a 200° arc for a single probability.
@@ -49,12 +52,13 @@ Times are unix seconds; values are 0–1, or any number with `valueFormat: 'numb
 Call `setSeries()` again with new data and changed lines morph into place.
 
 ```ts
-import { LiveChart, Sparkline, Gauge } from 'probable'
+import { LiveChart, OutcomeBars, Sparkline, Gauge } from 'probable'
 
 const live = new LiveChart(el, { color: '#FF9900' })
 live.setTarget(64250)
 socket.onmessage = (e) => live.push(JSON.parse(e.data).price)
 
+new OutcomeBars(list, { items: [{ id: 'a', label: 'Hold', value: 0.47, change: 0.06 } /* … */] })
 new Sparkline(card, { data: [0.52, 0.55, 0.61, 0.58, 0.64], floor: 0.5 })
 new Gauge(badge, { value: 0.56, label: '56%' })
 ```
@@ -62,7 +66,7 @@ new Gauge(badge, { value: 0.56, label: '56%' })
 React:
 
 ```tsx
-import { ProbabilityChart, Sparkline, Gauge } from 'probable/react'
+import { ProbabilityChart, OutcomeBars, Sparkline, Gauge } from 'probable/react'
 
 <ProbabilityChart series={series} theme="auto" />
 ```

@@ -1,7 +1,7 @@
 import type { ApiSpec } from './api'
 import type { DemoContext } from './main'
 import { highlight } from './util'
-import { CHART_DEFAULTS, SPARKLINE_DEFAULTS, GAUGE_DEFAULTS, LIVE_CHART_DEFAULTS, PALETTE, PALETTE_ORDER, TOKENS } from '../src/index'
+import { CHART_DEFAULTS, SPARKLINE_DEFAULTS, GAUGE_DEFAULTS, LIVE_CHART_DEFAULTS, OUTCOME_BARS_DEFAULTS, PALETTE, PALETTE_ORDER, TOKENS } from '../src/index'
 import { playground } from './playground'
 
 export interface Demo {
@@ -33,7 +33,7 @@ const asRecord = (o: object) => o as Record<string, unknown>
 // The deploy copies the library build next to the site.
 const LIB_URL = new URL(`${import.meta.env.BASE_URL}lib/probable.js`, location.origin).href
 
-export const GROUPS = ['Getting started', 'ProbabilityChart', 'LiveChart', 'Sparkline', 'Gauge', 'Reference']
+export const GROUPS = ['Getting started', 'ProbabilityChart', 'LiveChart', 'OutcomeBars', 'Sparkline', 'Gauge', 'Reference']
 
 export const PAGES: Page[] = [
   {
@@ -47,6 +47,7 @@ export const PAGES: Page[] = [
         html: `<h2>Charts</h2><div class="cards">
           <a class="card-link" href="#/end-labels"><b>ProbabilityChart</b><span>Lines over time with end labels or a legend, hover pills, drag-to-compare, time windows and smooth updates.</span></a>
           <a class="card-link" href="#/live"><b>LiveChart</b><span>A streaming price line that scrolls in real time, with a target line and crosshair.</span></a>
+          <a class="card-link" href="#/outcome-bars"><b>OutcomeBars</b><span>A ranked list of outcomes with bars, values and change badges that reorder smoothly.</span></a>
           <a class="card-link" href="#/sparkline"><b>Sparkline</b><span>Compact lines for cards and table rows: draw-in, track and pulsing end dot.</span></a>
           <a class="card-link" href="#/gauge"><b>Gauge</b><span>A 200° arc for a single probability.</span></a>
         </div>
@@ -98,6 +99,20 @@ chart.setSeries([
     title: 'Numbers & units',
     intro: p('Not everything is a probability. <code>valueFormat: \'number\'</code> (or <code>\'currency\'</code>) formats axis, pills and labels as numbers, and a summary header shows the current value with its change over the range. The header follows the cursor.'),
     sections: [{ demo: { title: "valueFormat: 'number', unit: 'tickets'", file: 'number' } }],
+  },
+  {
+    id: 'stacked',
+    group: 'ProbabilityChart',
+    title: 'Stacked shares',
+    intro: p('<code>stacked: true</code> draws mutually exclusive outcomes as bands that add up to 100%, so you see share move between outcomes instead of lines crossing. Series are aligned on one timeline and normalised (<code>normalize</code>); the first series is the top band. Hover, pills, end labels and the legend all report each outcome\'s share.'),
+    sections: [{ demo: { title: 'stacked: true, area: 0.22', file: 'stacked' } }],
+  },
+  {
+    id: 'annotations',
+    group: 'ProbabilityChart',
+    title: 'Annotations',
+    intro: p('<code>annotations</code> marks events on the time axis. Markers within 30px merge into a numbered cluster. Hovering a marker, or passing over it with the crosshair, shows a card with the date, title and description, plus a dashed guide line.'),
+    sections: [{ demo: { title: 'Five events, two clustered', file: 'annotations' } }, { html: '<h2>Annotation</h2>', api: { interface: 'Annotation' } }],
   },
   {
     id: 'gradient',
@@ -157,6 +172,18 @@ chart.setSeries([
     ],
   },
   {
+    id: 'outcome-bars',
+    group: 'OutcomeBars',
+    title: 'OutcomeBars',
+    intro: p('A ranked list of outcomes: label, change badge, value and a bar. On <code>setItems()</code> rows glide to their new rank, bars resize and numbers count to their new value. Bars are relative to 100% for probabilities, or to the largest value for numbers.'),
+    sections: [
+      { demo: { title: 'Live-updating outcomes', file: 'outcome-bars' } },
+      { html: '<h2>Options</h2>', api: { interface: 'OutcomeBarsOptions', defaults: asRecord(OUTCOME_BARS_DEFAULTS) } },
+      { html: '<h2>Outcome</h2>', api: { interface: 'Outcome' } },
+      { html: '<h2>Methods</h2>', api: { class: 'OutcomeBars' } },
+    ],
+  },
+  {
     id: 'sparkline',
     group: 'Sparkline',
     title: 'Sparkline',
@@ -210,10 +237,11 @@ chart.setSeries([
     intro: p('Thin wrappers around the same classes. Prop changes go through <code>setOptions</code>, so animations survive re-renders.'),
     sections: [
       {
-        html: code(`import { ProbabilityChart, Sparkline, Gauge } from 'probable/react'
+        html: code(`import { ProbabilityChart, OutcomeBars, Sparkline, Gauge } from 'probable/react'
 
 <ProbabilityChart series={series} labels="auto" theme="auto" />
 <Sparkline data={values} color="#2e5cff" floor={0} midline style={{ height: 160 }} />
+<OutcomeBars items={outcomes} limit={4} />
 <Gauge value={0.56} label="56%" />`),
       },
     ],

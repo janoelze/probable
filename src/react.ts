@@ -5,6 +5,7 @@ import { createElement, useEffect, useRef, type CSSProperties } from 'react'
 import { ProbabilityChart as Chart, type ProbabilityChartOptions } from './probability-chart'
 import { Sparkline as Spark, type SparklineOptions } from './sparkline'
 import { Gauge as G, type GaugeOptions } from './gauge'
+import { OutcomeBars as Bars, type OutcomeBarsOptions } from './outcome-bars'
 
 interface Instance<O> {
   setOptions(o: Partial<O>): void
@@ -38,6 +39,7 @@ interface Common {
 export type ProbabilityChartProps = ProbabilityChartOptions & Common
 export type SparklineProps = SparklineOptions & Common
 export type GaugeProps = GaugeOptions & Common
+export type OutcomeBarsProps = OutcomeBarsOptions & Common
 
 /** `<ProbabilityChart series={…} />`: pass new `series` to update (paths morph). */
 export function ProbabilityChart({ className, style, ...options }: ProbabilityChartProps) {
@@ -52,5 +54,11 @@ export function Sparkline({ className, style, ...options }: SparklineProps) {
 
 export function Gauge({ className, style, ...options }: GaugeProps) {
   const ref = useInstance<GaugeOptions>((el, o) => new G(el, o), options)
+  return createElement('div', { ref, className, style })
+}
+
+/** `<OutcomeBars items={…} />`: pass new `items` to animate rank and value changes. */
+export function OutcomeBars({ className, style, ...options }: OutcomeBarsProps) {
+  const ref = useInstance<OutcomeBarsOptions>((el, o) => new Bars(el, o), options)
   return createElement('div', { ref, className, style })
 }
