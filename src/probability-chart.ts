@@ -352,11 +352,10 @@ export class ProbabilityChart {
     this.theme = t.theme
     this.stopTheme = t.stop
 
-    this.root = h('div', 'pb-root', el)
+    this.root = h('div', 'pb-root pb-chart', el)
     this.legendRow = h('div', 'pb-legend-row', this.root)
     this.summaryEl = h('div', 'pb-summary', this.root)
     this.plot = h('div', 'pb-plot', this.root)
-    this.plot.style.marginTop = '28px'
     this.inner = h('div', '', this.plot)
     this.inner.style.cssText = 'display:flex;width:100%;height:100%;position:relative;overflow:visible'
     this.svg = s('svg', {}, this.inner)
@@ -620,6 +619,8 @@ export class ProbabilityChart {
     this.plot.style.height = `${this.o.height}px`
     this.renderLegend(L)
     this.renderSummary()
+    // With nothing above the plot it keeps a gap-sized top margin for the date tooltip.
+    this.root.classList.toggle('pb-has-header', this.legendRow.style.display !== 'none' || this.summaryEl.style.display !== 'none')
     this.renderWindows()
     if (!L) return
     this.layout = L
@@ -1460,7 +1461,8 @@ export class ProbabilityChart {
     else if (flip) left = Math.min(hv.x - 12 - w, R - w + 4)
     else left = Math.min(hv.x + 8, R)
     // Wrapped end labels: the date sits 6px above the top label instead of the chart top.
-    let top = -24
+    // The date sits in the gap above the plot (the `--pb-gap` between header and plot).
+    let top = -(parseFloat(getComputedStyle(this.root).rowGap) || 15)
     if (L.odds === 'end' && L.labelWidth) {
       const { boxes } = this.sideLayout(L)
       if (boxes.length) top = margin.top + boxes[0].adj - tip.getBoundingClientRect().height - DATE_LABEL_GAP
